@@ -56,7 +56,7 @@ class Router:
         """Loop que envia atualizações de roteamento em intervalos regulares."""
         while True:
             time.sleep(self.update_interval)
-            print(f"[{time.ctime()}] Enviando atualizações periÃ³dicas para os vizinhos...")
+            print(f"[{time.ctime()}] Enviando atualizações periódicas para os vizinhos...")
             try:
                 self.send_updates_to_neighbors()
             except Exception as e:
@@ -193,6 +193,7 @@ def get_routes():
 @app.route('/receive_update', methods=['POST'])
 def receive_update():
     """Endpoint que recebe atualizações de roteamento de um vizinho."""
+    
     if not request.json:
         return jsonify({"error": "Invalid request"}), 400
 
@@ -205,6 +206,50 @@ def receive_update():
 
     print(f"Recebida atualização de {sender_address}:")
     print(json.dumps(sender_table, indent=4))
+
+    if sender_address not in router_instance.neighbors:
+        return jsonify({"error": "Unknown neighbor"}), 400
+
+    link_cost = router_instance.neighbors[sender_address]
+    changed = False
+
+    for network, info in sender_table.items():
+        if ":" in network:
+            continue
+        if not isinstance(info, dict):
+            continue
+        if "cost" not in info or "next_hop" not in info:
+            continue
+
+        try:
+            reported_cost = int(info["cost"])
+        except (ValueError, TypeError):
+            continue
+
+        new_cost = link_cost + reported_cost
+        current = router_instance.routing_table.get(network)
+
+        if current is None:
+            router_instance.routing_table[network] = {
+                "cost": new_cost,
+                "next_hop": sender_address
+            }
+            changed = True
+        else:
+            current_cost = current.get("cost")
+            current_next = current.get("next_hop")
+
+            if (current_cost is None) or (new_cost < current_cost) or (current_next == sender_address):
+                if current_cost != new_cost or current_next != sender_address:
+                    router_instance.routing_table[network] = {
+                        "cost": new_cost,
+                        "next_hop": sender_address
+                    }
+                    changed = True
+
+    if changed:
+        print("Tabela de roteamento ATUALIZADA:")
+        print(json.dumps(router_instance.routing_table, indent=4))
 
     # TODO: Implemente a lógica de Bellman-Ford aqui.
     #
@@ -226,18 +271,19 @@ def receive_update():
     # 6. Mantenha um registro se sua tabela mudou ou não. Se mudou, talvez seja
     #    uma boa ideia imprimir a nova tabela no console.
 
+    
+
     return jsonify({"status": "success", "message": "Update received"}), 200
 
-
 if __name__ == '__main__':
-    parser = ArgumentParser(description="Simulador de Roteador com Vetor de DistÃ¢ncia")
+    parser = ArgumentParser(description="Simulador de Roteador com Vetor de Distância")
     parser.add_argument('-p', '--port', type=int, default=5000, help="Porta para executar o roteador.")
-    parser.add_argument('-f', '--file', type=str, required=True, help="Arquivo CSV de configuraÃ§Ã£o de vizinhos.")
+    parser.add_argument('-f', '--file', type=str, required=True, help="Arquivo CSV de configuração de vizinhos.")
     parser.add_argument('--network', type=str, required=True, help="Rede administrada por este roteador (ex: 10.0.1.0/24).")
-    parser.add_argument('--interval', type=int, default=10, help="Intervalo de atualização periÃ³dica em segundos.")
+    parser.add_argument('--interval', type=int, default=10, help="Intervalo de atualização periódica em segundos.")
     args = parser.parse_args()
 
-    # Leitura do arquivo de configuraÃ§Ã£o de vizinhos
+    # Leitura do arquivo de configuração de vizinhos
     neighbors_config = {}
     try:
         with open(args.file, mode='r') as infile:
@@ -245,7 +291,7 @@ if __name__ == '__main__':
             for row in reader:
                 neighbors_config[row['vizinho']] = int(row['custo'])
     except FileNotFoundError:
-        print(f"Erro: Arquivo de configuraÃ§Ã£o '{args.file}' nÃ£o encontrado.")
+        print(f"Erro: Arquivo de configuração '{args.file}' não encontrado.")
         exit(1)
     except (KeyError, ValueError) as e:
         print(f"Erro no formato do arquivo CSV: {e}. Verifique as colunas 'vizinho' e 'custo'.")
@@ -253,7 +299,7 @@ if __name__ == '__main__':
 
     my_full_address = f"127.0.0.1:{args.port}"
     print("--- Iniciando Roteador ---")
-    print(f"EndereÃ§o: {my_full_address}")
+    print(f"Endereço: {my_full_address}")
     print(f"Rede Local: {args.network}")
     print(f"Vizinhos Diretos: {neighbors_config}")
     print(f"Intervalo de atualização: {args.interval}s")
@@ -268,4 +314,3 @@ if __name__ == '__main__':
 
     # Inicia o servidor Flask
     app.run(host='0.0.0.0', port=args.port, debug=False)
-
