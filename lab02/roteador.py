@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 
 import csv
 import json
@@ -11,15 +11,15 @@ from flask import Flask, jsonify, request
 
 class Router:
     """
-    Representa um roteador que executa o algoritmo de Vetor de Distância.
+    Representa um roteador que executa o algoritmo de Vetor de DistÃ¢ncia.
     """
 
     def __init__(self, my_address, neighbors, my_network, update_interval=1):
         """
         Inicializa o roteador.
 
-        :param my_address: O endereço (ip:porta) deste roteador.
-        :param neighbors: Um dicionário contendo os vizinhos diretos e o custo do link.
+        :param my_address: O endereÃ§o (ip:porta) deste roteador.
+        :param neighbors: Um dicionÃ¡rio contendo os vizinhos diretos e o custo do link.
                           Ex: {'127.0.0.1:5001': 5, '127.0.0.1:5002': 10}
         :param my_network: A rede que este roteador administra diretamente.
                            Ex: '10.0.1.0/24'
@@ -30,21 +30,15 @@ class Router:
         self.my_network = my_network
         self.update_interval = update_interval
 
-        # TODO: Este é o local para criar e inicializar sua tabela de roteamento.
-        #
-        # 1. Crie a estrutura de dados para a tabela de roteamento. Um dicionário é
-        #    uma ótima escolha, onde as chaves são as redes de destino (ex: '10.0.1.0/24')
-        #    e os valores são outro dicionário contendo 'cost' e 'next_hop'.
-        #    Ex: {'10.0.1.0/24': {'cost': 0, 'next_hop': '10.0.1.0/24'}}
-        #
-        # 2. Adicione a rota para a rede que este roteador administra diretamente
-        #    (a rede em 'self.my_network'). O custo para uma rede diretamente
-        #    conectada é 0, e o 'next_hop' pode ser a própria rede ou o endereço do roteador.
-        #
-        # 3. Adicione as rotas para seus vizinhos diretos, usando o dicionário
-        #    'self.neighbors'. Para cada vizinho, o 'cost' é o custo do link direto
-        #    e o 'next_hop' é o endereço do próprio vizinho.
-        self.routing_table = {}
+        self.routing_table = {
+            self.my_network: {"cost": 0, "next_hop": self.my_network}
+        }
+
+        for neighbor_address, link_cost in self.neighbors.items():
+            self.routing_table[neighbor_address] = {
+                "cost": link_cost,
+                "next_hop": neighbor_address
+            }
 
         print("Tabela de roteamento inicial:")
         print(json.dumps(self.routing_table, indent=4))
@@ -62,11 +56,11 @@ class Router:
         """Loop que envia atualizações de roteamento em intervalos regulares."""
         while True:
             time.sleep(self.update_interval)
-            print(f"[{time.ctime()}] Enviando atualizações periódicas para os vizinhos...")
+            print(f"[{time.ctime()}] Enviando atualizações periÃ³dicas para os vizinhos...")
             try:
                 self.send_updates_to_neighbors()
             except Exception as e:
-                print(f"Erro durante a atualização periódida: {e}")
+                print(f"Erro durante a atualização periódica: {e}")
 
     def send_updates_to_neighbors(self):
         """
@@ -80,8 +74,86 @@ class Router:
         # 1. CRIE UMA CÓPIA da `self.routing_table` NÃO ALTERE ESTA VALOR.
         # 2. IMPLEMENTE A LÓGICA DE SUMARIZAÇÃO nesta cópia.
         # 3. ENVIE A CÓPIA SUMARIZADA no payload, em vez da tabela original.
-        
-        tabela_para_enviar = self.routing_table # ATENÇÃO: Substitua pela cópia sumarizada.
+        def _ip_to_int(ip):
+            a, b, c, d = ip.split('.')
+            return (int(a) << 24) | (int(b) << 16) | (int(c) << 8) | int(d)
+
+        def _int_to_ip(value):
+            return f"{(value >> 24) & 255}.{(value >> 16) & 255}.{(value >> 8) & 255}.{value & 255}"
+
+        def _parse_cidr(route):
+            if ':' in route or '/' not in route:
+                return None
+            try:
+                ip_part, prefix_part = route.split('/', 1)
+                prefix = int(prefix_part)
+                if prefix < 0 or prefix > 32:
+                    return None
+                mask = 0 if prefix == 0 else ((0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF)
+                network_int = _ip_to_int(ip_part) & mask
+                return network_int, prefix
+            except (ValueError, AttributeError):
+                return None
+
+        tabela_para_enviar = {
+            destino: info.copy() if isinstance(info, dict) else info
+            for destino, info in self.routing_table.items()
+        } 
+
+        while True:
+            grupos = {}
+            for destino, info in tabela_para_enviar.items():
+                if not isinstance(info, dict):
+                    continue
+
+                parsed = _parse_cidr(destino)
+                if parsed is None:
+                    continue
+
+                network_int, prefix = parsed
+                if prefix == 0:
+                    continue
+
+                next_hop = info.get("next_hop")
+                cost = info.get("cost")
+                if next_hop is None or cost is None:
+                    continue
+
+                grupos.setdefault((next_hop, prefix), []).append((network_int, destino, cost))
+
+            merged = False
+            for (next_hop, prefix), rotas in grupos.items():
+                if len(rotas) < 2:
+                    continue
+
+                rotas.sort(key=lambda item: item[0])
+                passo = 1 << (32 - prefix)
+                mascara_super_rede = (passo << 1) - 1
+
+                for i in range(len(rotas) - 1):
+                    net1, dest1, cost1 = rotas[i]
+                    net2, dest2, cost2 = rotas[i + 1]
+
+                    if net2 - net1 != passo:
+                        continue
+                    if (net1 & mascara_super_rede) != 0:
+                        continue
+
+                    super_rede = f"{_int_to_ip(net1)}/{prefix - 1}"
+                    tabela_para_enviar.pop(dest1, None)
+                    tabela_para_enviar.pop(dest2, None)
+                    tabela_para_enviar[super_rede] = {
+                        "cost": cost1 if cost1 >= cost2 else cost2,
+                        "next_hop": next_hop
+                    }
+                    merged = True
+                    break
+
+                if merged:
+                    break
+
+            if not merged:
+                break
 
         payload = {
             "sender_address": self.my_address,
@@ -96,6 +168,7 @@ class Router:
             except requests.exceptions.RequestException as e:
                 print(f"Não foi possível conectar ao vizinho {neighbor_address}. Erro: {e}")
 
+
 # --- API Endpoints ---
 # Instância do Flask e do Roteador (serão inicializadas no main)
 app = Flask(__name__)
@@ -104,19 +177,18 @@ router_instance = None
 @app.route('/routes', methods=['GET'])
 def get_routes():
     """Endpoint para visualizar a tabela de roteamento atual."""
-    # TODO: Aluno! Este endpoint está parcialmente implementado para ajudar na depuração.
-    # Você pode mantê-lo como está ou customizá-lo se desejar.
-    # - mantenha o routing_table como parte da resposta JSON.
     if router_instance:
         return jsonify({
-            "message": "Não implementado!.",
+            "status": "success",
+            "message": "Tabela de roteamento atual",
             "vizinhos" : router_instance.neighbors,
             "my_network": router_instance.my_network,
             "my_address": router_instance.my_address,
             "update_interval": router_instance.update_interval,
-            "routing_table": router_instance.routing_table # Exibe a tabela de roteamento atual (a ser implementada)
+            "routing_table": router_instance.routing_table
         })
     return jsonify({"error": "Roteador não inicializado"}), 500
+
 
 @app.route('/receive_update', methods=['POST'])
 def receive_update():
@@ -156,15 +228,16 @@ def receive_update():
 
     return jsonify({"status": "success", "message": "Update received"}), 200
 
+
 if __name__ == '__main__':
-    parser = ArgumentParser(description="Simulador de Roteador com Vetor de Distância")
+    parser = ArgumentParser(description="Simulador de Roteador com Vetor de DistÃ¢ncia")
     parser.add_argument('-p', '--port', type=int, default=5000, help="Porta para executar o roteador.")
-    parser.add_argument('-f', '--file', type=str, required=True, help="Arquivo CSV de configuração de vizinhos.")
+    parser.add_argument('-f', '--file', type=str, required=True, help="Arquivo CSV de configuraÃ§Ã£o de vizinhos.")
     parser.add_argument('--network', type=str, required=True, help="Rede administrada por este roteador (ex: 10.0.1.0/24).")
-    parser.add_argument('--interval', type=int, default=10, help="Intervalo de atualização periódica em segundos.")
+    parser.add_argument('--interval', type=int, default=10, help="Intervalo de atualização periÃ³dica em segundos.")
     args = parser.parse_args()
 
-    # Leitura do arquivo de configuração de vizinhos
+    # Leitura do arquivo de configuraÃ§Ã£o de vizinhos
     neighbors_config = {}
     try:
         with open(args.file, mode='r') as infile:
@@ -172,7 +245,7 @@ if __name__ == '__main__':
             for row in reader:
                 neighbors_config[row['vizinho']] = int(row['custo'])
     except FileNotFoundError:
-        print(f"Erro: Arquivo de configuração '{args.file}' não encontrado.")
+        print(f"Erro: Arquivo de configuraÃ§Ã£o '{args.file}' nÃ£o encontrado.")
         exit(1)
     except (KeyError, ValueError) as e:
         print(f"Erro no formato do arquivo CSV: {e}. Verifique as colunas 'vizinho' e 'custo'.")
@@ -180,10 +253,10 @@ if __name__ == '__main__':
 
     my_full_address = f"127.0.0.1:{args.port}"
     print("--- Iniciando Roteador ---")
-    print(f"Endereço: {my_full_address}")
+    print(f"EndereÃ§o: {my_full_address}")
     print(f"Rede Local: {args.network}")
     print(f"Vizinhos Diretos: {neighbors_config}")
-    print(f"Intervalo de Atualização: {args.interval}s")
+    print(f"Intervalo de atualização: {args.interval}s")
     print("--------------------------")
 
     router_instance = Router(
@@ -195,3 +268,4 @@ if __name__ == '__main__':
 
     # Inicia o servidor Flask
     app.run(host='0.0.0.0', port=args.port, debug=False)
+
