@@ -18,8 +18,8 @@ class Router:
         """
         Inicializa o roteador.
 
-        :param my_address: O endereÃ§o (ip:porta) deste roteador.
-        :param neighbors: Um dicionÃ¡rio contendo os vizinhos diretos e o custo do link.
+        :param my_address: O endereço (ip:porta) deste roteador.
+        :param neighbors: Um dicionário contendo os vizinhos diretos e o custo do link.
                           Ex: {'127.0.0.1:5001': 5, '127.0.0.1:5002': 10}
         :param my_network: A rede que este roteador administra diretamente.
                            Ex: '10.0.1.0/24'
@@ -68,7 +68,7 @@ class Router:
         """
         # TODO: O código abaixo envia a tabela de roteamento *diretamente*.
         #
-        # ESTE TRECHO DEVE SER CHAMAADO APOS A SUMARIZAÇÃO.
+        # ESTE TRECHO DEVE SER CHAMADO APOS A SUMARIZAÇÃO.
         #
         # dica:
         # 1. CRIE UMA CÓPIA da `self.routing_table` NÃO ALTERE ESTA VALOR.
