@@ -115,8 +115,12 @@ class Router:
 
             network_int, prefix = parsed
             next_hop = info.get("next_hop")
-            cost = info.get("cost")
-            if next_hop is None or cost is None:
+            raw_cost = info.get("cost")
+            if next_hop is None or raw_cost is None:
+                continue
+            try:
+                cost = int(raw_cost)
+            except (ValueError, TypeError):
                 continue
 
             grupos.setdefault((next_hop, prefix), []).append((destino, network_int, cost))
