@@ -125,7 +125,62 @@ class Router:
 
             grupos.setdefault((next_hop, prefix), []).append((destino, network_int, cost))
 
+        grupos_relaxados = set()
         for (next_hop, prefix), rotas in grupos.items():
+            if prefix < 1 or len(rotas) < 2:
+                continue
+
+            step = 1 << (32 - prefix)
+            redes_unicas = sorted({item[1] for item in rotas})
+            if len(redes_unicas) < 2:
+                continue
+
+            min_net = redes_unicas[0]
+            max_net = redes_unicas[-1]
+            max_end = max_net + step - 1
+
+            xor_value = min_net ^ max_end
+            summary_prefix = 32
+            while xor_value:
+                xor_value >>= 1
+                summary_prefix -= 1
+
+            if summary_prefix < 9:
+                continue
+
+            relax_bits = prefix - summary_prefix
+            if relax_bits < 1:
+                continue
+            # Evita superdimensionar demais: permite até 4x os blocos base.
+            if relax_bits > 2:
+                continue
+
+            summary_block_size = 1 << (32 - summary_prefix)
+            summary_mask = (0xFFFFFFFF << (32 - summary_prefix)) & 0xFFFFFFFF
+            summary_start = min_net & summary_mask
+            total_slots = summary_block_size // step
+            existing_slots = len(redes_unicas)
+            missing_slots = total_slots - existing_slots
+
+            # Permite no máximo 1 bloco faltante para casos não potência de 2.
+            if missing_slots > 1:
+                continue
+
+            rede_sumarizada = f"{_int_to_ip(summary_start)}/{summary_prefix}"
+            custo_sumarizado = max(item[2] for item in rotas)
+
+            for destino_original, _, _ in rotas:
+                tabela_para_enviar.pop(destino_original, None)
+
+            tabela_para_enviar[rede_sumarizada] = {
+                "cost": custo_sumarizado,
+                "next_hop": next_hop
+            }
+            grupos_relaxados.add((next_hop, prefix))
+
+        for (next_hop, prefix), rotas in grupos.items():
+            if (next_hop, prefix) in grupos_relaxados:
+                continue
             if prefix < 1:
                 continue
 
