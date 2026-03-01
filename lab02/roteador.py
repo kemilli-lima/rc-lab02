@@ -125,69 +125,14 @@ class Router:
 
             grupos.setdefault((next_hop, prefix), []).append((destino, network_int, cost))
 
-        grupos_relaxados = set()
+        # 1) Sumarização exata primeiro (mais segura): blocos contíguos, alinhados e potência de 2.
         for (next_hop, prefix), rotas in grupos.items():
-            if prefix < 1 or len(rotas) < 2:
-                continue
-
-            step = 1 << (32 - prefix)
-            redes_unicas = sorted({item[1] for item in rotas})
-            if len(redes_unicas) < 2:
-                continue
-
-            min_net = redes_unicas[0]
-            max_net = redes_unicas[-1]
-            max_end = max_net + step - 1
-
-            xor_value = min_net ^ max_end
-            summary_prefix = 32
-            while xor_value:
-                xor_value >>= 1
-                summary_prefix -= 1
-
-            if summary_prefix < 9:
-                continue
-
-            relax_bits = prefix - summary_prefix
-            if relax_bits < 1:
-                continue
-            # Evita superdimensionar demais: permite até 4x os blocos base.
-            if relax_bits > 2:
-                continue
-
-            summary_block_size = 1 << (32 - summary_prefix)
-            summary_mask = (0xFFFFFFFF << (32 - summary_prefix)) & 0xFFFFFFFF
-            summary_start = min_net & summary_mask
-            total_slots = summary_block_size // step
-            existing_slots = len(redes_unicas)
-            missing_slots = total_slots - existing_slots
-
-            # Permite no máximo 1 bloco faltante para casos não potência de 2.
-            if missing_slots > 1:
-                continue
-
-            rede_sumarizada = f"{_int_to_ip(summary_start)}/{summary_prefix}"
-            custo_sumarizado = max(item[2] for item in rotas)
-
-            for destino_original, _, _ in rotas:
-                tabela_para_enviar.pop(destino_original, None)
-
-            tabela_para_enviar[rede_sumarizada] = {
-                "cost": custo_sumarizado,
-                "next_hop": next_hop
-            }
-            grupos_relaxados.add((next_hop, prefix))
-
-        for (next_hop, prefix), rotas in grupos.items():
-            if (next_hop, prefix) in grupos_relaxados:
-                continue
             if prefix < 1:
                 continue
 
             if len(rotas) < 2:
                 continue
 
-            # Para um prefixo fixo, cada rota ocupa blocos de mesmo tamanho.
             step = 1 << (32 - prefix)
             rotas_ordenadas = sorted(rotas, key=lambda item: item[1])
             run_inicio = 0
@@ -242,6 +187,76 @@ class Router:
                         i += 1
 
                 run_inicio = run_fim + 1
+
+        # 2) Sumarização relaxada (opcional) sobre o que sobrou após a etapa exata.
+        for (next_hop, prefix), rotas in grupos.items():
+            if prefix < 1 or len(rotas) < 2:
+                continue
+
+            # Só considera rotas ainda não resumidas na etapa exata.
+            rotas_restantes = [
+                (destino, network_int, cost)
+                for destino, network_int, cost in rotas
+                if destino in tabela_para_enviar
+            ]
+            if len(rotas_restantes) < 2:
+                continue
+
+            step = 1 << (32 - prefix)
+            redes_unicas = sorted({item[1] for item in rotas_restantes})
+            if len(redes_unicas) < 2:
+                continue
+
+            min_net = redes_unicas[0]
+            max_net = redes_unicas[-1]
+            max_end = max_net + step - 1
+
+            xor_value = min_net ^ max_end
+            summary_prefix = 32
+            while xor_value:
+                xor_value >>= 1
+                summary_prefix -= 1
+
+            if summary_prefix < 9:
+                continue
+
+            relax_bits = prefix - summary_prefix
+            if relax_bits < 1:
+                continue
+            # Evita superdimensionar demais: permite até 4x os blocos base.
+            if relax_bits > 2:
+                continue
+
+            summary_block_size = 1 << (32 - summary_prefix)
+            summary_mask = (0xFFFFFFFF << (32 - summary_prefix)) & 0xFFFFFFFF
+            summary_start = min_net & summary_mask
+            total_slots = summary_block_size // step
+
+            present_slots = sorted({(net - summary_start) // step for net in redes_unicas})
+            if any(slot < 0 or slot >= total_slots for slot in present_slots):
+                continue
+
+            missing_slots = total_slots - len(present_slots)
+            if missing_slots > 1:
+                continue
+
+            # Se houver 1 "buraco", ele só pode estar na borda, nunca no meio.
+            if missing_slots == 1:
+                all_slots = set(range(total_slots))
+                missing_slot = (all_slots - set(present_slots)).pop()
+                if missing_slot not in (0, total_slots - 1):
+                    continue
+
+            rede_sumarizada = f"{_int_to_ip(summary_start)}/{summary_prefix}"
+            custo_sumarizado = max(item[2] for item in rotas_restantes)
+
+            for destino_original, _, _ in rotas_restantes:
+                tabela_para_enviar.pop(destino_original, None)
+
+            tabela_para_enviar[rede_sumarizada] = {
+                "cost": custo_sumarizado,
+                "next_hop": next_hop
+            }
 
         for neighbor_address in self.neighbors:
             tabela_do_vizinho = tabela_para_enviar if neighbor_address in self.summarize_neighbors else tabela_detalhada
