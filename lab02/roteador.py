@@ -14,7 +14,16 @@ class Router:
     Representa um roteador que executa o algoritmo de Vetor de DistÃ¢ncia.
     """
 
-    def __init__(self, my_address, neighbors, my_network, update_interval=1, summarize_neighbors=None):
+    def __init__(
+        self,
+        my_address,
+        neighbors,
+        my_network,
+        update_interval=1,
+        summarize_neighbors=None,
+        poisoned_reverse=False,
+        infinity_metric=16
+    ):
         """
         Inicializa o roteador.
 
@@ -26,12 +35,16 @@ class Router:
         :param update_interval: O intervalo em segundos para enviar atualizações, o tempo que o roteador espera
                                antes de enviar atualizações para os vizinhos.
         :param summarize_neighbors: Conjunto/lista de vizinhos para os quais os anúncios devem ser sumarizados.
+        :param poisoned_reverse: Habilita o envio de rotas aprendidas de um vizinho com métrica infinita para ele.
+        :param infinity_metric: Valor de métrica considerado "infinito" no poisoned reverse.
         """
         self.my_address = my_address
         self.neighbors = neighbors
         self.my_network = my_network
         self.update_interval = update_interval
         self.summarize_neighbors = set(summarize_neighbors or [])
+        self.poisoned_reverse = poisoned_reverse
+        self.infinity_metric = int(infinity_metric)
 
         self.routing_table = {
             self.my_network: {"cost": 0, "next_hop": self.my_network}
@@ -259,7 +272,19 @@ class Router:
             }
 
         for neighbor_address in self.neighbors:
-            tabela_do_vizinho = tabela_para_enviar if neighbor_address in self.summarize_neighbors else tabela_detalhada
+            tabela_base = tabela_para_enviar if neighbor_address in self.summarize_neighbors else tabela_detalhada
+            tabela_do_vizinho = {
+                destino: info.copy() if isinstance(info, dict) else info
+                for destino, info in tabela_base.items()
+            }
+
+            if self.poisoned_reverse:
+                for destino, info in tabela_do_vizinho.items():
+                    if not isinstance(info, dict):
+                        continue
+                    if info.get("next_hop") == neighbor_address:
+                        info["cost"] = self.infinity_metric
+
             payload = {
                 "sender_address": self.my_address,
                 "routing_table": tabela_do_vizinho
@@ -392,6 +417,17 @@ if __name__ == '__main__':
         default='',
         help="Lista de vizinhos (ip:porta) separados por vírgula para receber anúncios sumarizados."
     )
+    parser.add_argument(
+        '--poisoned-reverse',
+        action='store_true',
+        help="Habilita poisoned reverse no envio das atualizações."
+    )
+    parser.add_argument(
+        '--infinity-metric',
+        type=int,
+        default=16,
+        help="Métrica infinita usada no poisoned reverse (padrão: 16)."
+    )
     args = parser.parse_args()
 
     # Leitura do arquivo de configuração de vizinhos
@@ -420,6 +456,8 @@ if __name__ == '__main__':
     print(f"Vizinhos Diretos: {neighbors_config}")
     print(f"Intervalo de atualização: {args.interval}s")
     print(f"Vizinhos com sumarização: {sorted(summarize_neighbors)}")
+    print(f"Poisoned reverse: {'habilitado' if args.poisoned_reverse else 'desabilitado'}")
+    print(f"Métrica infinita: {args.infinity_metric}")
     print("--------------------------")
 
     router_instance = Router(
@@ -427,7 +465,9 @@ if __name__ == '__main__':
         neighbors=neighbors_config,
         my_network=args.network,
         update_interval=args.interval,
-        summarize_neighbors=summarize_neighbors
+        summarize_neighbors=summarize_neighbors,
+        poisoned_reverse=args.poisoned_reverse,
+        infinity_metric=args.infinity_metric
     )
 
     # Inicia o servidor Flask
