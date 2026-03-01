@@ -92,70 +92,74 @@ class Router:
             except (ValueError, AttributeError):
                 return None
 
-        tabela_detalhada = {
-            destino: info.copy() if isinstance(info, dict) else info
-            for destino, info in self.routing_table.items()
-        }
+        def _prefix_from_range(min_start, max_end):
+            xor_value = min_start ^ max_end
+            prefix = 32
+            while xor_value:
+                xor_value >>= 1
+                prefix -= 1
+            # Evita sumarização superdimensionada /8 ou menor.
+            if prefix < 9:
+                prefix = 9
+            return prefix
+
+        def _network_range(network_int, prefix):
+            block_size = 1 << (32 - prefix)
+            start = network_int
+            end = start + block_size - 1
+            return start, end
+
+        tabela_detalhada = {}
+        for destino, info in self.routing_table.items():
+            if ":" in destino:
+                continue
+            if not isinstance(info, dict):
+                continue
+            if _parse_cidr(destino) is None:
+                continue
+            tabela_detalhada[destino] = info.copy()
 
         tabela_para_enviar = {
-            destino: info.copy() if isinstance(info, dict) else info
+            destino: info.copy()
             for destino, info in tabela_detalhada.items()
         }
 
-        while True:
-            grupos = {}
-            for destino, info in tabela_para_enviar.items():
-                if not isinstance(info, dict):
-                    continue
+        grupos_por_next_hop = {}
+        for destino, info in tabela_detalhada.items():
+            parsed = _parse_cidr(destino)
+            if parsed is None:
+                continue
 
-                parsed = _parse_cidr(destino)
-                if parsed is None:
-                    continue
+            network_int, prefix = parsed
+            start, end = _network_range(network_int, prefix)
+            next_hop = info.get("next_hop")
+            cost = info.get("cost")
+            if next_hop is None or cost is None:
+                continue
 
-                network_int, prefix = parsed
-                if prefix == 0:
-                    continue
+            grupos_por_next_hop.setdefault(next_hop, []).append(
+                (destino, network_int, prefix, start, end, cost)
+            )
 
-                next_hop = info.get("next_hop")
-                cost = info.get("cost")
-                if next_hop is None or cost is None:
-                    continue
+        for next_hop, rotas in grupos_por_next_hop.items():
+            if len(rotas) < 2:
+                continue
 
-                grupos.setdefault((next_hop, prefix), []).append((network_int, destino, cost))
+            min_start = min(item[3] for item in rotas)
+            max_end = max(item[4] for item in rotas)
+            summary_prefix = _prefix_from_range(min_start, max_end)
+            summary_mask = (0xFFFFFFFF << (32 - summary_prefix)) & 0xFFFFFFFF
+            summary_network_int = min_start & summary_mask
+            summary_network = f"{_int_to_ip(summary_network_int)}/{summary_prefix}"
+            summary_cost = max(item[5] for item in rotas)
 
-            merged = False
-            for (next_hop, prefix), rotas in grupos.items():
-                if len(rotas) < 2:
-                    continue
+            for destino, _, _, _, _, _ in rotas:
+                tabela_para_enviar.pop(destino, None)
 
-                rotas.sort(key=lambda item: item[0])
-                passo = 1 << (32 - prefix)
-                mascara_super_rede = (passo << 1) - 1
-
-                for i in range(len(rotas) - 1):
-                    net1, dest1, cost1 = rotas[i]
-                    net2, dest2, cost2 = rotas[i + 1]
-
-                    if net2 - net1 != passo:
-                        continue
-                    if (net1 & mascara_super_rede) != 0:
-                        continue
-
-                    super_rede = f"{_int_to_ip(net1)}/{prefix - 1}"
-                    tabela_para_enviar.pop(dest1, None)
-                    tabela_para_enviar.pop(dest2, None)
-                    tabela_para_enviar[super_rede] = {
-                        "cost": cost1 if cost1 >= cost2 else cost2,
-                        "next_hop": next_hop
-                    }
-                    merged = True
-                    break
-
-                if merged:
-                    break
-
-            if not merged:
-                break
+            tabela_para_enviar[summary_network] = {
+                "cost": summary_cost,
+                "next_hop": next_hop
+            }
 
         for neighbor_address in self.neighbors:
             tabela_do_vizinho = tabela_para_enviar if neighbor_address in self.summarize_neighbors else tabela_detalhada
