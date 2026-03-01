@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import csv
 import json
@@ -14,7 +14,7 @@ class Router:
     Representa um roteador que executa o algoritmo de Vetor de DistÃ¢ncia.
     """
 
-    def __init__(self, my_address, neighbors, my_network, update_interval=1):
+    def __init__(self, my_address, neighbors, my_network, update_interval=1, summarize_neighbors=None):
         """
         Inicializa o roteador.
 
@@ -23,12 +23,15 @@ class Router:
                           Ex: {'127.0.0.1:5001': 5, '127.0.0.1:5002': 10}
         :param my_network: A rede que este roteador administra diretamente.
                            Ex: '10.0.1.0/24'
-        :param update_interval: O intervalo em segundos para enviar atualizações, o tempo que o roteador espera 
-                                antes de enviar atualizações para os vizinhos.        """
+        :param update_interval: O intervalo em segundos para enviar atualizações, o tempo que o roteador espera
+                               antes de enviar atualizações para os vizinhos.
+        :param summarize_neighbors: Conjunto/lista de vizinhos para os quais os anúncios devem ser sumarizados.
+        """
         self.my_address = my_address
         self.neighbors = neighbors
         self.my_network = my_network
         self.update_interval = update_interval
+        self.summarize_neighbors = set(summarize_neighbors or [])
 
         self.routing_table = {
             self.my_network: {"cost": 0, "next_hop": self.my_network}
@@ -64,16 +67,10 @@ class Router:
 
     def send_updates_to_neighbors(self):
         """
-        Envia a tabela de roteamento (potencialmente sumarizada) para todos os vizinhos.
+        Envia a tabela por vizinho:
+        - detalhada para vizinhos comuns
+        - sumarizada para vizinhos configurados em `self.summarize_neighbors`
         """
-        # TODO: O código abaixo envia a tabela de roteamento *diretamente*.
-        #
-        # ESTE TRECHO DEVE SER CHAMADO APOS A SUMARIZAÇÃO.
-        #
-        # dica:
-        # 1. CRIE UMA CÓPIA da `self.routing_table` NÃO ALTERE ESTA VALOR.
-        # 2. IMPLEMENTE A LÓGICA DE SUMARIZAÇÃO nesta cópia.
-        # 3. ENVIE A CÓPIA SUMARIZADA no payload, em vez da tabela original.
         def _ip_to_int(ip):
             a, b, c, d = ip.split('.')
             return (int(a) << 24) | (int(b) << 16) | (int(c) << 8) | int(d)
@@ -95,10 +92,15 @@ class Router:
             except (ValueError, AttributeError):
                 return None
 
-        tabela_para_enviar = {
+        tabela_detalhada = {
             destino: info.copy() if isinstance(info, dict) else info
             for destino, info in self.routing_table.items()
-        } 
+        }
+
+        tabela_para_enviar = {
+            destino: info.copy() if isinstance(info, dict) else info
+            for destino, info in tabela_detalhada.items()
+        }
 
         while True:
             grupos = {}
@@ -155,15 +157,16 @@ class Router:
             if not merged:
                 break
 
-        payload = {
-            "sender_address": self.my_address,
-            "routing_table": tabela_para_enviar
-        }
-
         for neighbor_address in self.neighbors:
+            tabela_do_vizinho = tabela_para_enviar if neighbor_address in self.summarize_neighbors else tabela_detalhada
+            payload = {
+                "sender_address": self.my_address,
+                "routing_table": tabela_do_vizinho
+            }
             url = f'http://{neighbor_address}/receive_update'
             try:
-                print(f"Enviando tabela para {neighbor_address}")
+                modo = "sumarizada" if neighbor_address in self.summarize_neighbors else "detalhada"
+                print(f"Enviando tabela {modo} para {neighbor_address}")
                 requests.post(url, json=payload, timeout=5)
             except requests.exceptions.RequestException as e:
                 print(f"Não foi possível conectar ao vizinho {neighbor_address}. Erro: {e}")
@@ -185,6 +188,7 @@ def get_routes():
             "my_network": router_instance.my_network,
             "my_address": router_instance.my_address,
             "update_interval": router_instance.update_interval,
+            "summarize_neighbors": sorted(router_instance.summarize_neighbors),
             "routing_table": router_instance.routing_table
         })
     return jsonify({"error": "Roteador não inicializado"}), 500
@@ -281,6 +285,12 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--file', type=str, required=True, help="Arquivo CSV de configuração de vizinhos.")
     parser.add_argument('--network', type=str, required=True, help="Rede administrada por este roteador (ex: 10.0.1.0/24).")
     parser.add_argument('--interval', type=int, default=10, help="Intervalo de atualização periódica em segundos.")
+    parser.add_argument(
+        '--summarize-neighbors',
+        type=str,
+        default='',
+        help="Lista de vizinhos (ip:porta) separados por vírgula para receber anúncios sumarizados."
+    )
     args = parser.parse_args()
 
     # Leitura do arquivo de configuração de vizinhos
@@ -298,18 +308,25 @@ if __name__ == '__main__':
         exit(1)
 
     my_full_address = f"127.0.0.1:{args.port}"
+    summarize_neighbors = {
+        neighbor.strip()
+        for neighbor in args.summarize_neighbors.split(',')
+        if neighbor.strip()
+    }
     print("--- Iniciando Roteador ---")
     print(f"Endereço: {my_full_address}")
     print(f"Rede Local: {args.network}")
     print(f"Vizinhos Diretos: {neighbors_config}")
     print(f"Intervalo de atualização: {args.interval}s")
+    print(f"Vizinhos com sumarização: {sorted(summarize_neighbors)}")
     print("--------------------------")
 
     router_instance = Router(
         my_address=my_full_address,
         neighbors=neighbors_config,
         my_network=args.network,
-        update_interval=args.interval
+        update_interval=args.interval,
+        summarize_neighbors=summarize_neighbors
     )
 
     # Inicia o servidor Flask
