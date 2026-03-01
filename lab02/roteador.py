@@ -92,23 +92,6 @@ class Router:
             except (ValueError, AttributeError):
                 return None
 
-        def _prefix_from_range(min_start, max_end):
-            xor_value = min_start ^ max_end
-            prefix = 32
-            while xor_value:
-                xor_value >>= 1
-                prefix -= 1
-            # Evita sumarização superdimensionada /8 ou menor.
-            if prefix < 9:
-                prefix = 9
-            return prefix
-
-        def _network_range(network_int, prefix):
-            block_size = 1 << (32 - prefix)
-            start = network_int
-            end = start + block_size - 1
-            return start, end
-
         tabela_detalhada = {}
         for destino, info in self.routing_table.items():
             if ":" in destino:
@@ -124,42 +107,82 @@ class Router:
             for destino, info in tabela_detalhada.items()
         }
 
-        grupos_por_next_hop = {}
+        grupos = {}
         for destino, info in tabela_detalhada.items():
             parsed = _parse_cidr(destino)
             if parsed is None:
                 continue
 
             network_int, prefix = parsed
-            start, end = _network_range(network_int, prefix)
             next_hop = info.get("next_hop")
             cost = info.get("cost")
             if next_hop is None or cost is None:
                 continue
 
-            grupos_por_next_hop.setdefault(next_hop, []).append(
-                (destino, network_int, prefix, start, end, cost)
-            )
+            grupos.setdefault((next_hop, prefix), []).append((destino, network_int, cost))
 
-        for next_hop, rotas in grupos_por_next_hop.items():
+        for (next_hop, prefix), rotas in grupos.items():
+            if prefix < 1:
+                continue
+
             if len(rotas) < 2:
                 continue
 
-            min_start = min(item[3] for item in rotas)
-            max_end = max(item[4] for item in rotas)
-            summary_prefix = _prefix_from_range(min_start, max_end)
-            summary_mask = (0xFFFFFFFF << (32 - summary_prefix)) & 0xFFFFFFFF
-            summary_network_int = min_start & summary_mask
-            summary_network = f"{_int_to_ip(summary_network_int)}/{summary_prefix}"
-            summary_cost = max(item[5] for item in rotas)
+            # Para um prefixo fixo, cada rota ocupa blocos de mesmo tamanho.
+            step = 1 << (32 - prefix)
+            rotas_ordenadas = sorted(rotas, key=lambda item: item[1])
+            run_inicio = 0
 
-            for destino, _, _, _, _, _ in rotas:
-                tabela_para_enviar.pop(destino, None)
+            while run_inicio < len(rotas_ordenadas):
+                run_fim = run_inicio
+                while (
+                    run_fim + 1 < len(rotas_ordenadas)
+                    and rotas_ordenadas[run_fim + 1][1] - rotas_ordenadas[run_fim][1] == step
+                ):
+                    run_fim += 1
 
-            tabela_para_enviar[summary_network] = {
-                "cost": summary_cost,
-                "next_hop": next_hop
-            }
+                run = rotas_ordenadas[run_inicio:run_fim + 1]
+                i = 0
+                while i < len(run):
+                    inicio_bloco = run[i][1]
+                    restantes = len(run) - i
+                    bloco_len = 1
+
+                    # Busca o maior bloco potência de 2, alinhado e sem criar /8 ou menor.
+                    candidato = 1
+                    while candidato * 2 <= restantes:
+                        candidato *= 2
+
+                    while candidato >= 2:
+                        novo_prefixo = prefix - (candidato.bit_length() - 1)
+                        if novo_prefixo < 9:
+                            candidato //= 2
+                            continue
+
+                        bloco_tamanho_ips = candidato * step
+                        if inicio_bloco % bloco_tamanho_ips == 0:
+                            bloco_len = candidato
+                            break
+                        candidato //= 2
+
+                    if bloco_len >= 2:
+                        chunk = run[i:i + bloco_len]
+                        novo_prefixo = prefix - (bloco_len.bit_length() - 1)
+                        rede_sumarizada = f"{_int_to_ip(inicio_bloco)}/{novo_prefixo}"
+                        custo_sumarizado = max(item[2] for item in chunk)
+
+                        for destino_original, _, _ in chunk:
+                            tabela_para_enviar.pop(destino_original, None)
+
+                        tabela_para_enviar[rede_sumarizada] = {
+                            "cost": custo_sumarizado,
+                            "next_hop": next_hop
+                        }
+                        i += bloco_len
+                    else:
+                        i += 1
+
+                run_inicio = run_fim + 1
 
         for neighbor_address in self.neighbors:
             tabela_do_vizinho = tabela_para_enviar if neighbor_address in self.summarize_neighbors else tabela_detalhada
