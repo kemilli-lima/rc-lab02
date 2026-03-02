@@ -22,7 +22,8 @@ class Router:
         update_interval=1,
         summarize_neighbors=None,
         poisoned_reverse=False,
-        infinity_metric=16
+        infinity_metric=16,
+        route_timeout_cycles=3
     ):
         """
         Inicializa o roteador.
@@ -37,6 +38,7 @@ class Router:
         :param summarize_neighbors: Conjunto/lista de vizinhos para os quais os anúncios devem ser sumarizados.
         :param poisoned_reverse: Habilita o envio de rotas aprendidas de um vizinho com métrica infinita para ele.
         :param infinity_metric: Valor de métrica considerado "infinito" no poisoned reverse.
+        :param route_timeout_cycles: Quantos ciclos sem update para considerar vizinho inativo.
         """
         self.my_address = my_address
         self.neighbors = neighbors
@@ -45,6 +47,12 @@ class Router:
         self.summarize_neighbors = set(summarize_neighbors or [])
         self.poisoned_reverse = poisoned_reverse
         self.infinity_metric = int(infinity_metric)
+        self.route_timeout_cycles = max(1, int(route_timeout_cycles))
+        self.route_timeout_seconds = self.route_timeout_cycles * self.update_interval
+        self.update_cycle = 0
+        now = time.time()
+        self.neighbor_last_seen = {neighbor: now for neighbor in self.neighbors}
+        self.neighbors_down = set()
 
         self.routing_table = {
             self.my_network: {"cost": 0, "next_hop": self.my_network}
@@ -62,6 +70,58 @@ class Router:
         # Inicia o processo de atualização periódica em uma thread separada
         self._start_periodic_updates()
 
+    def mark_neighbor_seen(self, neighbor_address):
+        """Atualiza o timestamp de recebimento e recupera vizinho anteriormente inativo."""
+        self.neighbor_last_seen[neighbor_address] = time.time()
+        if neighbor_address in self.neighbors_down:
+            self.neighbors_down.remove(neighbor_address)
+            self.routing_table[neighbor_address] = {
+                "cost": self.neighbors[neighbor_address],
+                "next_hop": neighbor_address
+            }
+            print(
+                f"[ciclo {self.update_cycle}] Vizinho {neighbor_address} voltou a responder; "
+                "rota direta restaurada."
+            )
+
+    def _expire_stale_neighbors(self):
+        """Invalida rotas de vizinhos sem atualização por tempo demais."""
+        now = time.time()
+        for neighbor_address in self.neighbors:
+            last_seen = self.neighbor_last_seen.get(neighbor_address, now)
+            if now - last_seen <= self.route_timeout_seconds:
+                continue
+            if neighbor_address in self.neighbors_down:
+                continue
+
+            self.neighbors_down.add(neighbor_address)
+            self.routing_table[neighbor_address] = {
+                "cost": self.infinity_metric,
+                "next_hop": neighbor_address
+            }
+
+            changed = False
+            for network, info in list(self.routing_table.items()):
+                if network == self.my_network:
+                    continue
+                if not isinstance(info, dict):
+                    continue
+                if info.get("next_hop") != neighbor_address:
+                    continue
+                if int(info.get("cost", self.infinity_metric)) != self.infinity_metric:
+                    info["cost"] = self.infinity_metric
+                    self.routing_table[network] = info
+                    changed = True
+
+            timeout_cycles = int((now - last_seen) // self.update_interval)
+            print(
+                f"[ciclo {self.update_cycle}] Vizinho {neighbor_address} inativo por "
+                f"{timeout_cycles} ciclos: rotas via ele marcadas com custo {self.infinity_metric}."
+            )
+            if changed:
+                print("Tabela de roteamento após expiração:")
+                print(json.dumps(self.routing_table, indent=4))
+
     def _start_periodic_updates(self):
         """Inicia uma thread para enviar atualizações periodicamente."""
         thread = threading.Thread(target=self._periodic_update_loop)
@@ -72,7 +132,12 @@ class Router:
         """Loop que envia atualizações de roteamento em intervalos regulares."""
         while True:
             time.sleep(self.update_interval)
-            print(f"[{time.ctime()}] Enviando atualizações periódicas para os vizinhos...")
+            self.update_cycle += 1
+            self._expire_stale_neighbors()
+            print(
+                f"[{time.ctime()}] Enviando atualizações periódicas para os vizinhos... "
+                f"(ciclo {self.update_cycle})"
+            )
             try:
                 self.send_updates_to_neighbors()
             except Exception as e:
@@ -314,6 +379,9 @@ def get_routes():
             "my_network": router_instance.my_network,
             "my_address": router_instance.my_address,
             "update_interval": router_instance.update_interval,
+            "update_cycle": router_instance.update_cycle,
+            "route_timeout_cycles": router_instance.route_timeout_cycles,
+            "neighbors_down": sorted(router_instance.neighbors_down),
             "summarize_neighbors": sorted(router_instance.summarize_neighbors),
             "routing_table": router_instance.routing_table
         })
@@ -340,6 +408,7 @@ def receive_update():
     if sender_address not in router_instance.neighbors:
         return jsonify({"error": "Unknown neighbor"}), 400
 
+    router_instance.mark_neighbor_seen(sender_address)
     link_cost = router_instance.neighbors[sender_address]
     changed = False
 
@@ -431,6 +500,12 @@ if __name__ == '__main__':
         help="Métrica infinita usada no poisoned reverse (padrão: 16)."
     )
     parser.add_argument(
+        '--route-timeout-cycles',
+        type=int,
+        default=3,
+        help="Ciclos sem update para considerar vizinho inativo (padrão: 3)."
+    )
+    parser.add_argument(
         '--host',
         type=str,
         required=True,
@@ -469,6 +544,7 @@ if __name__ == '__main__':
     print(f"Vizinhos com sumarização: {sorted(summarize_neighbors)}")
     print(f"Poisoned reverse: {'habilitado' if args.poisoned_reverse else 'desabilitado'}")
     print(f"Métrica infinita: {args.infinity_metric}")
+    print(f"Timeout de rota (ciclos): {args.route_timeout_cycles}")
     print("--------------------------")
 
     router_instance = Router(
@@ -478,7 +554,8 @@ if __name__ == '__main__':
         update_interval=args.interval,
         summarize_neighbors=summarize_neighbors,
         poisoned_reverse=args.poisoned_reverse,
-        infinity_metric=args.infinity_metric
+        infinity_metric=args.infinity_metric,
+        route_timeout_cycles=args.route_timeout_cycles
     )
     
     app.run(host='0.0.0.0', port=args.port, debug=False)
