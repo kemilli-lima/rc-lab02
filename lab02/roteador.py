@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 
 import csv
 import json
@@ -428,6 +428,13 @@ if __name__ == '__main__':
         default=16,
         help="Métrica infinita usada no poisoned reverse (padrão: 16)."
     )
+    parser.add_argument(
+        '--host',
+        type=str,
+        required=True,
+        help="IP real desta máquina na rede local (ex: 192.168.50.217)"
+    )
+
     args = parser.parse_args()
 
     # Leitura do arquivo de configuração de vizinhos
@@ -444,12 +451,14 @@ if __name__ == '__main__':
         print(f"Erro no formato do arquivo CSV: {e}. Verifique as colunas 'vizinho' e 'custo'.")
         exit(1)
 
-    my_full_address = f"127.0.0.1:{args.port}"
+    my_full_address = f"{args.host}:{args.port}"
+
     summarize_neighbors = {
         neighbor.strip()
         for neighbor in args.summarize_neighbors.split(',')
         if neighbor.strip()
     }
+
     print("--- Iniciando Roteador ---")
     print(f"Endereço: {my_full_address}")
     print(f"Rede Local: {args.network}")
@@ -469,6 +478,5 @@ if __name__ == '__main__':
         poisoned_reverse=args.poisoned_reverse,
         infinity_metric=args.infinity_metric
     )
-
-    # Inicia o servidor Flask
+    
     app.run(host='0.0.0.0', port=args.port, debug=False)
