@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import csv
 import json
@@ -344,6 +344,8 @@ def receive_update():
     changed = False
 
     for network, info in sender_table.items():
+        if network == router_instance.my_network:
+            continue
         if ":" in network:
             continue
         if not isinstance(info, dict):
