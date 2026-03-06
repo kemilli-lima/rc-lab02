@@ -15,18 +15,18 @@ Essa organização atende ao requisito do README para Grupo 5:
 
 | Roteador | Address | Rede administrada |
 |---|---|---|
-| R1 | 127.0.0.1:5001 | 10.0.1.0/24 |
-| R2 | 127.0.0.1:5002 | 10.0.2.0/24 |
-| R3 | 127.0.0.1:5003 | 10.0.3.0/24 |
-| R4 | 127.0.0.1:5004 | 10.0.4.0/24 |
-| R5 | 127.0.0.1:5005 | 10.0.5.0/24 |
-| R6 | 127.0.0.1:5006 | 10.0.6.0/24 |
-| R7 | 127.0.0.1:5007 | 10.0.7.0/24 |
-| R8 | 127.0.0.1:5008 | 10.0.8.0/24 |
-| R9 | 127.0.0.1:5009 | 10.0.9.0/24 |
-| R10 | 127.0.0.1:5010 | 10.0.10.0/24 |
-| R11 | 127.0.0.1:5011 | 10.0.11.0/24 |
-| R12 | 127.0.0.1:5012 | 10.0.12.0/24 |
+| R1 | 150.165.42.1:5000 | 10.0.1.0/24 |
+| R2 | 150.165.42.2:5000 | 10.0.2.0/24 |
+| R3 | 150.165.42.3:5000 | 10.0.3.0/24 |
+| R4 | 150.165.42.4:5000 | 10.0.4.0/24 |
+| R5 | 150.165.42.5:5000 | 10.0.5.0/24 |
+| R6 | 150.165.42.6:5000 | 10.0.6.0/24 |
+| R7 | 150.165.42.7:5000 | 10.0.7.0/24 |
+| R8 | 150.165.42.8:5000 | 10.0.8.0/24 |
+| R9 | 150.165.42.9:5000 | 10.0.9.0/24 |
+| R10 | 150.165.42.10:5000 | 10.0.10.0/24 |
+| R11 | 150.165.42.11:5000 | 10.0.11.0/24 |
+| R12 | 150.165.42.12:5000 | 10.0.12.0/24 |
 
 ## 3) Enlaces e custos
 
@@ -89,5 +89,5 @@ Referências:
 
 ## 7) Observações para entrega
 
-- Para execução local nesta máquina, foi usado loopback (`127.0.0.1`) e portas distintas.
-- Se o professor exigir estritamente o formato final de endereçamento descrito no README para entrega, adapte `address`/CSVs para o padrão solicitado antes do envio final.
+- O cenário foi definido na rede de controle `150.165.42.0/24`, com custo explícito em cada enlace dos arquivos `R*.csv`.
+- Cada roteador gerencia ao menos uma rede de clientes (`10.0.X.0/24`), atendendo ao requisito de múltiplas sub-redes.

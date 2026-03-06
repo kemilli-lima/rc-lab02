@@ -102,17 +102,18 @@ def build_capture_from_logs(topology):
 def main():
     topology = load_topology()
     procs = start_routers(topology)
+    snapshot_address = topology[0]["address"]
     try:
         # Snapshot inicial após todos subirem.
         time.sleep(4)
-        routes_initial = fetch_routes("127.0.0.1:5001")
+        routes_initial = fetch_routes(snapshot_address)
         INITIAL_ROUTES_FILE.write_text(
             json.dumps(routes_initial, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
         # Tempo para convergência.
         time.sleep(20)
-        routes_final = fetch_routes("127.0.0.1:5001")
+        routes_final = fetch_routes(snapshot_address)
         FINAL_ROUTES_FILE.write_text(
             json.dumps(routes_final, indent=2, ensure_ascii=False), encoding="utf-8"
         )
